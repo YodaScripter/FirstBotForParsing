@@ -59,6 +59,22 @@ async def cmd_start(message: types.Message):
     await message.answer("Введите ссылку")
 
 
+@dp.message_handler(commands='list')
+async def channel_list_for_user(message: types.Message):
+    conn = await create_connection_mysql_db(db_config["mysql"]["host"],
+                                            db_config["mysql"]["user"],
+                                            db_config["mysql"]["pass"])
+    cursor = conn.cursor()
+
+    sql_check_values = """SELECT name, url, num_of_messages_downloaded FROM parse_tg.channel_list_for_user;"""
+    cursor.execute(sql_check_values)
+    query_result = cursor.fetchall()
+
+    await message.answer(md.text(
+        md.text(query_result),
+    ))
+
+
 @dp.message_handler(state=Form.url)
 async def process_url(message: types.Message, state: FSMContext):
     conn = await create_connection_mysql_db(db_config["mysql"]["host"],
@@ -75,14 +91,16 @@ async def process_url(message: types.Message, state: FSMContext):
         return await message.reply("Что-то не так с ссылкой")
 
     sql_check_values = f"""
-    SELECT * FROM parse_tg.channel_list_for_user WHERE name = '{entry.title}' and url = '{data["url"]}';
+    SELECT * FROM parse_tg.channel_list_for_user 
+    WHERE name = '{entry.title}' and url = '{data["url"]}';
     """
     cursor.execute(sql_check_values)
     query_result = cursor.fetchall()
 
     if len(query_result) == 0:
         sql_insert = f"""
-        INSERT INTO parse_tg.channel_list_for_user (name, url, num_of_messages_downloaded) VALUES ('{entry.title}', '{data["url"]}', 0);
+        INSERT INTO parse_tg.channel_list_for_user (name, url, num_of_messages_downloaded) 
+        VALUES ('{entry.title}', '{data["url"]}', 0); 
         """
         cursor.execute(sql_insert)
 
@@ -130,6 +148,17 @@ async def process_n(message: types.Message, state: FSMContext):
             VALUES ('{message_from_client.date}', '{message_from_client.message}', '{entry.title}');
             """
             cursor.execute(sql_insert)
+
+    sql_count = f"""
+        SELECT COUNT(*) FROM parse_tg.data_for_analysis WHERE channel = '{entry.title}';
+        """
+    cursor.execute(sql_count)
+    query_result = cursor.fetchall()
+    sql_update = f"""
+        UPDATE parse_tg.channel_list_for_user 
+        SET num_of_messages_downloaded = {query_result[0][0]} WHERE name = '{entry.title}';
+        """
+    cursor.execute(sql_update)
 
     conn.commit()
     cursor.close()
