@@ -7,19 +7,23 @@ from loader import client
 from loader import dp
 from states.form_main_logic import FormMainLogic
 from utils.db_api.database import create_connection_mysql_db
+from utils.misc.logging import logger
 
 
 @dp.message_handler(commands='start')
 async def cmd_start(message: types.Message):
+    logger.info("Запуск команды страт")
     await FormMainLogic.lang.set()
     await message.answer("Введите язык каналов (рус/англ):")
 
 
 @dp.message_handler(state=FormMainLogic.lang)
 async def process_lang(message: types.Message, state: FSMContext):
+    logger.info("Провека вводимого языка")
     if message.text.lower() not in ["рус", "англ"]:
         return await message.reply('Можно выбрать только рус/англ (регистр не важен)')
 
+    logger.info('Запись данных в data["lang"]')
     async with state.proxy() as data:
         data["lang"] = message.text.lower()
 
@@ -29,6 +33,7 @@ async def process_lang(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=FormMainLogic.url)
 async def process_url(message: types.Message, state: FSMContext):
+    logger.info('Сплит по запятой')
     async with state.proxy() as data:
         data['urls'] = message.text.split(",")
 
@@ -37,10 +42,12 @@ async def process_url(message: types.Message, state: FSMContext):
                                             config.MYSQL_PASS)
     cursor = conn.cursor()
 
+    logger.info('Проверка корректности ссылки и запись в parse_tg.channel_list_for_user')
     for item in data['urls']:
         try:
             entry = await client.get_entity(item)
-        except:
+        except Exception as err:
+            logger.error("Ошибка: ", err)
             return await message.reply(f"Что-то не так с ссылкой {item}")
 
         # Добавление в таблицу каналов
@@ -66,6 +73,7 @@ async def process_url(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=FormMainLogic.n)
 async def process_n(message: types.Message, state: FSMContext):
+    logger.info('Проверка введенного значение на число')
     if not message.text.isdigit() and message.text != "-1":
         return await message.reply('Нужно число, введите еще раз:')
 
@@ -85,6 +93,7 @@ async def process_n(message: types.Message, state: FSMContext):
             )
         )
 
+    logger.info('Парсинг сообщений и запись в БД')
     for item in data['urls']:
         entry = await client.get_entity(item)
         limit_mess = 10000 if data['n'] == -1 else data['n']
