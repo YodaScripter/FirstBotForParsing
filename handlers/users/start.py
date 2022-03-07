@@ -5,8 +5,9 @@ from aiogram.dispatcher import FSMContext
 from data import config
 from loader import client
 from loader import dp
+from loader import exception_dict
 from states.form_main_logic import FormMainLogic
-from utils.db_api.database import create_connection_mysql_db
+from utils.db_api.mysql import create_connection_mysql_db
 from utils.misc.logging import logger
 
 
@@ -14,53 +15,90 @@ from utils.misc.logging import logger
 async def cmd_start(message: types.Message):
     logger.info("Запуск команды страт")
     await FormMainLogic.lang.set()
-    await message.answer("Введите язык каналов (рус/англ):")
+
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    buttons = ["Русский", "Английский"]
+    keyboard.add(*buttons)
+
+    await message.answer("Введите язык каналов (русский/английский):", reply_markup=keyboard)
 
 
 @dp.message_handler(state=FormMainLogic.lang)
 async def process_lang(message: types.Message, state: FSMContext):
-    logger.info("Провека вводимого языка")
-    if message.text.lower() not in ["рус", "англ"]:
-        return await message.reply('Можно выбрать только рус/англ (регистр не важен)')
 
-    logger.info('Запись данных в data["lang"]')
+    logger.info(f"Провека вводимого языка - {message.text}")
+
+    if message.text.lower() not in ["русский", "английский"]:
+        return await message.reply('Можно выбрать только русский/английский (регистр не важен)')
+
+    logger.info(f'Запись данных в data["lang"] - {message.text.lower()}')
     async with state.proxy() as data:
         data["lang"] = message.text.lower()
 
     await FormMainLogic.next()
-    await message.answer("Введите ссылку/и:")
+
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    buttons = ["Да", "Нет"]
+    keyboard.add(*buttons)
+
+    await message.answer("Нужно записывать media? (да/нет)", reply_markup=keyboard)
+
+
+@dp.message_handler(state=FormMainLogic.media)
+async def process_media(message: types.Message, state: FSMContext):
+
+    if message.text.lower() not in ["да", "нет"]:
+        return await message.reply('Можно выбрать только да/нет (регистр не важен)')
+
+    logger.info(f'Запись данных в data["media"] - {message.text.lower()}')
+
+    async with state.proxy() as data:
+        data["media"] = message.text.lower()
+
+    await FormMainLogic.next()
+    await message.answer("Введите ссылку/и:", reply_markup=types.ReplyKeyboardRemove())
 
 
 @dp.message_handler(state=FormMainLogic.url)
 async def process_url(message: types.Message, state: FSMContext):
-    logger.info('Сплит по запятой')
+
+    logger.info(f'Сплит по запятой - {message.text.split(", ")}')
+
     async with state.proxy() as data:
-        data['urls'] = message.text.split(",")
+        data['urls'] = message.text.split(", ")
 
     conn = await create_connection_mysql_db(config.MYSQL_HOST,
                                             config.MYSQL_USER,
                                             config.MYSQL_PASS)
     cursor = conn.cursor()
 
-    logger.info('Проверка корректности ссылки и запись в parse_tg.channel_list_for_user')
-    for item in data['urls']:
+    logger.info(f"Проверка корректности ссылок из {data['urls']} и запись в БД")
+    for url in data['urls']:
+        if url in exception_dict:
+            url = exception_dict[url]
+
         try:
-            entry = await client.get_entity(item)
+            entry = await client.get_entity(url)
         except Exception as err:
-            logger.error("Ошибка: ", err)
-            return await message.reply(f"Что-то не так с ссылкой {item}")
+            logger.error(f"Ошибка входа по ссылке - {url}, err - {err}")
+            await message.reply(f"Что-то не так с ссылкой - {url}, она будет пропущена")
+
+            async with state.proxy() as data:
+                data['urls'].remove(url)
+
+            continue
 
         # Добавление в таблицу каналов
         cursor.execute(f"""
         SELECT * FROM parse_tg.channel_list_for_user 
-        WHERE name = '{entry.title}' and url = '{item}';
+        WHERE name = '{entry.title}' and url = '{url}';
         """)
         query_result = cursor.fetchall()
 
         if len(query_result) == 0:
             cursor.execute(f"""
             INSERT INTO parse_tg.channel_list_for_user (name, url, num_of_messages_downloaded, language) 
-            VALUES ('{entry.title}', '{item}', 0, '{data["lang"]}'); 
+            VALUES ('{entry.title}', '{url}', 0, '{data["lang"]}'); 
             """)
 
     conn.commit()
@@ -73,7 +111,8 @@ async def process_url(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=FormMainLogic.n)
 async def process_n(message: types.Message, state: FSMContext):
-    logger.info('Проверка введенного значение на число')
+    logger.info(f'Проверка введенного текста на число - {message.text}')
+
     if not message.text.isdigit() and message.text != "-1":
         return await message.reply('Нужно число, введите еще раз:')
 
@@ -81,6 +120,7 @@ async def process_n(message: types.Message, state: FSMContext):
                                             config.MYSQL_USER,
                                             config.MYSQL_PASS)
     cursor = conn.cursor()
+
     await state.update_data(n=int(message.text))
 
     async with state.proxy() as data:
@@ -93,12 +133,17 @@ async def process_n(message: types.Message, state: FSMContext):
             )
         )
 
-    logger.info('Парсинг сообщений и запись в БД')
-    for item in data['urls']:
-        entry = await client.get_entity(item)
+    logger.info(f"Парсинг сообщений и запись в БД из - {data['urls']}")
+
+    for url in data['urls']:
+        if url in exception_dict:
+            url = exception_dict[url]
+
+        entry = await client.get_entity(url)
+
         limit_mess = 10000 if data['n'] == -1 else data['n']
 
-        for message_from_client in await client.get_messages(item, limit=limit_mess):
+        for message_from_client in await client.get_messages(url, limit=limit_mess):
             cursor.execute(f"""
             SELECT * FROM parse_tg.data_for_analysis 
             WHERE message_sending_time='{message_from_client.date}' and channel='{entry.title}';

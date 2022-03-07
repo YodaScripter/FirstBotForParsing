@@ -9,8 +9,8 @@ from utils.misc.logging import logger
 @dp.message_handler(state='*', commands='cancel')
 @dp.message_handler(Text(equals='cancel', ignore_case=True), state='*')
 async def cancel_handler(message: types.Message, state: FSMContext):
-    logger.info("Действие отменено")
     current_state = await state.get_state()
+    logger.info(f"Действие отменено, статус - {current_state}")
     if current_state is None:
         return
     await state.finish()

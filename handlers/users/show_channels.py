@@ -3,7 +3,7 @@ from aiogram import types
 
 from data import config
 from loader import dp
-from utils.db_api.database import create_connection_mysql_db
+from utils.db_api.mysql import create_connection_mysql_db
 from utils.misc.logging import logger
 
 
