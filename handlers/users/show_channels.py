@@ -18,9 +18,12 @@ async def channel_list_for_user(message: types.Message):
     cursor.execute("""SELECT name, url, num_of_messages_downloaded FROM parse_tg.channel_list_for_user;""")
     query_result = cursor.fetchall()
     if len(query_result) == 0:
-        await message.answer(md.text(
+        return await message.answer(md.text(
             md.text("Пока что пусто"),
         ))
+
+    cursor.close()
+    conn.close()
 
     s = ''.join(f"Канал : {i[0]}\nСсылка : {i[1]}\nКоличество скачанных сообщений : {i[2]}\n\n" for i in query_result)
     await message.answer(md.text(

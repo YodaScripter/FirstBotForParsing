@@ -3,10 +3,12 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 
 from data import config
+from keyboards.default.ketboards import keyboard_rus_en, keyboard_yes_no
 from loader import client
 from loader import dp
 from loader import exception_dict
 from states.form_main_logic import FormMainLogic
+from utils.additionally import add_urls_to_list
 from utils.db_api.mysql import create_connection_mysql_db
 from utils.misc.logging import logger
 
@@ -15,17 +17,11 @@ from utils.misc.logging import logger
 async def cmd_start(message: types.Message):
     logger.info("Запуск команды страт")
     await FormMainLogic.lang.set()
-
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    buttons = ["Русский", "Английский"]
-    keyboard.add(*buttons)
-
-    await message.answer("Введите язык каналов (русский/английский):", reply_markup=keyboard)
+    await message.answer("Введите язык каналов (русский/английский):", reply_markup=keyboard_rus_en)
 
 
 @dp.message_handler(state=FormMainLogic.lang)
 async def process_lang(message: types.Message, state: FSMContext):
-
     logger.info(f"Провека вводимого языка - {message.text}")
 
     if message.text.lower() not in ["русский", "английский"]:
@@ -36,17 +32,11 @@ async def process_lang(message: types.Message, state: FSMContext):
         data["lang"] = message.text.lower()
 
     await FormMainLogic.next()
-
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    buttons = ["Да", "Нет"]
-    keyboard.add(*buttons)
-
-    await message.answer("Нужно записывать media? (да/нет)", reply_markup=keyboard)
+    await message.answer("Нужно записывать media? (да/нет)", reply_markup=keyboard_yes_no)
 
 
 @dp.message_handler(state=FormMainLogic.media)
 async def process_media(message: types.Message, state: FSMContext):
-
     if message.text.lower() not in ["да", "нет"]:
         return await message.reply('Можно выбрать только да/нет (регистр не важен)')
 
@@ -55,55 +45,33 @@ async def process_media(message: types.Message, state: FSMContext):
     async with state.proxy() as data:
         data["media"] = message.text.lower()
 
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Спарсить все что есть в list")
+
     await FormMainLogic.next()
-    await message.answer("Введите ссылку/и:", reply_markup=types.ReplyKeyboardRemove())
+    await message.answer("Введите ссылку/и:", reply_markup=keyboard)
 
 
 @dp.message_handler(state=FormMainLogic.url)
 async def process_url(message: types.Message, state: FSMContext):
-
-    logger.info(f'Сплит по запятой - {message.text.split(", ")}')
-
-    async with state.proxy() as data:
-        data['urls'] = message.text.split(", ")
-
-    conn = await create_connection_mysql_db(config.MYSQL_HOST,
-                                            config.MYSQL_USER,
-                                            config.MYSQL_PASS)
-    cursor = conn.cursor()
-
-    logger.info(f"Проверка корректности ссылок из {data['urls']} и запись в БД")
-    for url in data['urls']:
-        if url in exception_dict:
-            url = exception_dict[url]
-
-        try:
-            entry = await client.get_entity(url)
-        except Exception as err:
-            logger.error(f"Ошибка входа по ссылке - {url}, err - {err}")
-            await message.reply(f"Что-то не так с ссылкой - {url}, она будет пропущена")
-
-            async with state.proxy() as data:
-                data['urls'].remove(url)
-
-            continue
-
-        # Добавление в таблицу каналов
-        cursor.execute(f"""
-        SELECT * FROM parse_tg.channel_list_for_user 
-        WHERE name = '{entry.title}' and url = '{url}';
-        """)
-        query_result = cursor.fetchall()
-
-        if len(query_result) == 0:
+    if message.text == "Спарсить все что есть в list":
+        conn = await create_connection_mysql_db(config.MYSQL_HOST,
+                                                config.MYSQL_USER,
+                                                config.MYSQL_PASS)
+        cursor = conn.cursor()
+        async with state.proxy() as data:
             cursor.execute(f"""
-            INSERT INTO parse_tg.channel_list_for_user (name, url, num_of_messages_downloaded, language) 
-            VALUES ('{entry.title}', '{url}', 0, '{data["lang"]}'); 
+            SELECT url FROM parse_tg.channel_list_for_user
+            WHERE language='{data["lang"]}';
             """)
+            data['urls'] = list(cursor.fetchall()[0])
+            if len(data['urls']) == 0:
+                return await message.answer("в /list пусто")
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
+    else:
+        await add_urls_to_list(message, state)
 
     await FormMainLogic.next()
     await message.answer("Сколько сообщений?")
@@ -113,8 +81,8 @@ async def process_url(message: types.Message, state: FSMContext):
 async def process_n(message: types.Message, state: FSMContext):
     logger.info(f'Проверка введенного текста на число - {message.text}')
 
-    if not message.text.isdigit() and message.text != "-1":
-        return await message.reply('Нужно число, введите еще раз:')
+    if not message.text.isdigit() and message.text > 5000 and message.text != "-1":
+        return await message.reply('Введите число [-1:5000]:')
 
     conn = await create_connection_mysql_db(config.MYSQL_HOST,
                                             config.MYSQL_USER,
@@ -144,16 +112,30 @@ async def process_n(message: types.Message, state: FSMContext):
         limit_mess = 10000 if data['n'] == -1 else data['n']
 
         for message_from_client in await client.get_messages(url, limit=limit_mess):
-            cursor.execute(f"""
+
+            path = None
+            if message_from_client.photo and data['media'] == 'да':
+                path = await message_from_client.download_media(file=f"media/{entry.title}/{message_from_client.id}")
+
+            sql_q = f"""
             SELECT * FROM parse_tg.data_for_analysis 
             WHERE message_sending_time='{message_from_client.date}' and channel='{entry.title}';
-             """)
+             """
+            cursor.execute(sql_q)
             query_result = cursor.fetchall()
+
             if len(query_result) == 0:
-                cursor.execute(f"""
-                INSERT INTO parse_tg.data_for_analysis (message_sending_time, message, channel, language) 
-                VALUES ('{message_from_client.date}', '{message_from_client.message}', '{entry.title}', '{data["lang"]}');
-                """)
+                sql_q = """
+                INSERT INTO parse_tg.data_for_analysis (message_sending_time, message, channel, language, media) 
+                VALUES (%s, %s, %s, %s, %s);
+                """
+                val = (message_from_client.date, message_from_client.message,
+                       entry.title, data["lang"], path)
+                try:
+                    cursor.execute(sql_q, val)
+                except Exception as e:
+                    logger.error(f"Ошибка вставки запроса: {sql_q} и {val}")
+                    return await message.answer("Ошибка обработки запроса")
 
         cursor.execute(f"""
             SELECT COUNT(*) FROM parse_tg.data_for_analysis WHERE channel = '{entry.title}';
