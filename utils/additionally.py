@@ -9,11 +9,13 @@ from utils.misc.logging import logger
 
 
 async def add_urls_to_list(message: types.Message, state: FSMContext):
-    logger.info(f'Сплит по запятой - {message.text.split(", ")}')
+    logger.info(f'Сплит по запятой - {message.text.split(",")}')
 
     async with state.proxy() as data:
         temp_str = message.text.replace('\n', '')
-        data['urls'] = temp_str.split(", ")
+        data['urls'] = [i.strip() for i in temp_str.split(",")]
+        logger.debug(f"data[urls] = {data['urls']}")
+
     conn = await create_connection_mysql_db(config.MYSQL_HOST,
                                             config.MYSQL_USER,
                                             config.MYSQL_PASS)
@@ -22,6 +24,7 @@ async def add_urls_to_list(message: types.Message, state: FSMContext):
     logger.info(f"Проверка корректности ссылок из {data['urls']} и запись в БД")
     for url in data['urls']:
         if url in exception_dict:
+            url_temp = url
             url = exception_dict[url]
 
         try:
@@ -36,6 +39,10 @@ async def add_urls_to_list(message: types.Message, state: FSMContext):
             continue
 
         # Добавление в таблицу каналов
+
+        if url in exception_dict:
+            url = url_temp
+
         cursor.execute(f"""
         SELECT * FROM parse_tg.channel_list_for_user 
         WHERE name = '{entry.title}' and url = '{url}';

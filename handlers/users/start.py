@@ -64,7 +64,9 @@ async def process_url(message: types.Message, state: FSMContext):
             SELECT url FROM parse_tg.channel_list_for_user
             WHERE language='{data["lang"]}';
             """)
-            data['urls'] = list(cursor.fetchall()[0])
+
+            data['urls'] = [item[0] for item in cursor.fetchall()]
+
             if len(data['urls']) == 0:
                 return await message.answer("в /list пусто")
 
@@ -103,6 +105,8 @@ async def process_n(message: types.Message, state: FSMContext):
 
     logger.info(f"Парсинг сообщений и запись в БД из - {data['urls']}")
 
+    await message.answer("Парсинг начался...")
+
     for url in data['urls']:
         if url in exception_dict:
             url = exception_dict[url]
@@ -111,7 +115,9 @@ async def process_n(message: types.Message, state: FSMContext):
 
         limit_mess = 10000 if data['n'] == -1 else data['n']
 
-        for message_from_client in await client.get_messages(url, limit=limit_mess):
+        get_mes = await client.get_messages(url, limit=limit_mess)
+
+        for message_from_client in get_mes:
 
             path = None
             if message_from_client.photo and data['media'] == 'да':
@@ -146,8 +152,11 @@ async def process_n(message: types.Message, state: FSMContext):
             SET num_of_messages_downloaded = {query_result[0][0]} WHERE name = '{entry.title}';
             """)
 
-    conn.commit()
+        conn.commit()
+        logger.info(f"Пасинг с ссылки {url} завершен")
+        await message.answer(f"Пасинг с ссылки {url} завершен")
+
     cursor.close()
     conn.close()
-
+    await message.answer("Парсинг завершен")
     await state.finish()
