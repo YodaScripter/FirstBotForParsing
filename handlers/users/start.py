@@ -83,7 +83,11 @@ async def process_url(message: types.Message, state: FSMContext):
 async def process_n(message: types.Message, state: FSMContext):
     logger.info(f'Проверка введенного текста на число - {message.text}')
 
-    if not message.text.isdigit() and message.text > 5000 and message.text != "-1":
+    try:
+        if not message.text.isdigit() and message.text > 5000 and message.text != "-1":
+            return await message.reply('Введите число [-1:5000]:')
+    except Exception as e:
+        logger.error(f"Ошибка ввода числа в process_n {message.text}")
         return await message.reply('Введите число [-1:5000]:')
 
     conn = await create_connection_mysql_db(config.MYSQL_HOST,
@@ -124,19 +128,27 @@ async def process_n(message: types.Message, state: FSMContext):
                 path = await message_from_client.download_media(file=f"media/{entry.title}/{message_from_client.id}")
 
             sql_q = f"""
-            SELECT * FROM parse_tg.data_for_analysis 
-            WHERE message_sending_time='{message_from_client.date}' and channel='{entry.title}';
+            SELECT media FROM parse_tg.data_for_analysis 
+            WHERE message_id='{message_from_client.id}' and channel='{entry.title}';
              """
             cursor.execute(sql_q)
             query_result = cursor.fetchall()
 
             if len(query_result) == 0:
                 sql_q = """
-                INSERT INTO parse_tg.data_for_analysis (message_sending_time, message, channel, language, media) 
-                VALUES (%s, %s, %s, %s, %s);
+                INSERT INTO parse_tg.data_for_analysis (message_sending_time, message, channel, language, media, message_id) 
+                VALUES (%s, %s, %s, %s, %s, %s);
                 """
                 val = (message_from_client.date, message_from_client.message,
-                       entry.title, data["lang"], path)
+                       entry.title, data["lang"], path, message_from_client.id)
+                try:
+                    cursor.execute(sql_q, val)
+                except Exception as e:
+                    logger.error(f"Ошибка вставки запроса: {sql_q} и {val}")
+                    return await message.answer("Ошибка обработки запроса")
+            elif query_result[0][0] is None and path is not None:
+                sql_q = "UPDATE parse_tg.data_for_analysis SET media = %s WHERE message_id=%s and channel=%s"
+                val = (path, message_from_client.id, entry.title)
                 try:
                     cursor.execute(sql_q, val)
                 except Exception as e:
